@@ -45,14 +45,27 @@
 <script src="supabase.js"></script>
 
 <script>
+// Verifica se o Supabase está inicializado
+if (typeof db === 'undefined') {
+    console.error('Supabase não foi inicializado. Verifique o arquivo supabase.js');
+}
+
 /* ---------------------- USER ---------------------- */
 async function checkUser() {
-    const { data } = await db.auth.getUser();
-    if (!data.user) {
+    try {
+        const { data, error } = await db.auth.getUser();
+        if (error || !data.user) {
+            console.error('Usuário não autenticado:', error);
+            window.location.href = "login.html";
+            return null;
+        }
+        console.log('Usuário autenticado:', data.user);
+        return data.user;
+    } catch (error) {
+        console.error('Erro ao verificar usuário:', error);
         window.location.href = "login.html";
-        return;
+        return null;
     }
-    return data.user;
 }
 
 /* ---------------------- RENDER ---------------------- */
@@ -60,93 +73,200 @@ const messagesDiv = document.getElementById("messages");
 
 function renderMessage(msg) {
     const el = document.createElement("p");
-
-    const username = msg.profiles?.username ?? "(desconhecido)";
+    
+    const username = msg.username || msg.profiles?.username || "(desconhecido)";
     const content = msg.content;
 
     el.textContent = username + ": " + content;
+    el.setAttribute('data-message-id', msg.id);
 
     messagesDiv.appendChild(el);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-
 /* Busca username de 1 usuário */
 async function fetchUsernameAndRender(msg) {
-    // usar maybeSingle() evita erro quando não há linha correspondente
-    const { data, error } = await db
-        .from("profiles")
-        .select("username")
-        .eq("id", msg.user_id)
-        .maybeSingle();
+    try {
+        console.log('Buscando username para user_id:', msg.user_id);
+        const { data, error } = await db
+            .from("profiles")
+            .select("username")
+            .eq("id", msg.user_id)
+            .single();
 
-    // garante valor padrão seguro
-    const username = (!error && data && data.username) ? data.username : "(desconhecido)";
-
-    msg.profiles = { username };
-    renderMessage(msg);
+        if (error) {
+            console.error("Erro ao buscar username:", error);
+            msg.username = "(desconhecido)";
+        } else {
+            console.log('Username encontrado:', data.username);
+            msg.username = data.username;
+        }
+        
+        renderMessage(msg);
+    } catch (err) {
+        console.error("Erro na busca de username:", err);
+        msg.username = "(desconhecido)";
+        renderMessage(msg);
+    }
 }
-
 
 /* ---------------------- LOAD MESSAGES ---------------------- */
 async function loadMessages() {
-    const { data, error } = await db
-        .from("messages")
-        .select("id, content, user_id, profiles(username)")
-        .order("created_at");
+    try {
+        console.log('Carregando mensagens...');
+        
+        // Tenta carregar com join primeiro
+        const { data, error } = await db
+            .from("messages")
+            .select(`
+                id, 
+                content, 
+                user_id,
+                profiles (username)
+            `)
+            .order("created_at", { ascending: true });
 
-    if (error) {
-        console.error(error);
-        return;
+        if (error) {
+            console.error("Erro ao carregar mensagens com join:", error);
+            // Fallback: carrega sem join
+            await loadMessagesWithoutJoin();
+            return;
+        }
+
+        console.log('Mensagens carregadas:', data);
+
+        // Processa cada mensagem
+        data.forEach(msg => {
+            if (msg.profiles && msg.profiles.username) {
+                // Se o join trouxe o username, renderiza diretamente
+                renderMessage(msg);
+            } else {
+                // Se não trouxe, busca individualmente
+                fetchUsernameAndRender(msg);
+            }
+        });
+
+    } catch (err) {
+        console.error("Erro geral ao carregar mensagens:", err);
     }
+}
 
-    data.forEach(renderMessage);
+/* Fallback para quando o join não funciona */
+async function loadMessagesWithoutJoin() {
+    try {
+        const { data, error } = await db
+            .from("messages")
+            .select("id, content, user_id, created_at")
+            .order("created_at", { ascending: true });
+
+        if (error) {
+            console.error("Erro ao carregar mensagens sem join:", error);
+            return;
+        }
+
+        console.log('Mensagens carregadas sem join:', data);
+        data.forEach(fetchUsernameAndRender);
+    } catch (err) {
+        console.error("Erro no fallback:", err);
+    }
 }
 
 /* ---------------------- SEND ---------------------- */
 document.getElementById("sendForm").addEventListener("submit", async (e) => {
     e.preventDefault();
 
-    const text = document.getElementById("text").value;
-    const user = await checkUser();
+    const textInput = document.getElementById("text");
+    const text = textInput.value.trim();
 
-    const { data, error } = await db
-        .from("messages")
-        .insert({
-            user_id: user.id,
-            content: text
-        })
-        .select();
-
-    if (error) {
-        console.error("Erro:", error);
-        alert(error.message);
+    if (!text) {
+        alert("Digite uma mensagem!");
         return;
     }
 
-    // Quando o user envia, já podemos puxar username direto
-    data[0].profiles = { username: user.user_metadata.username };
-renderMessage(data[0]);
+    try {
+        const user = await checkUser();
+        if (!user) {
+            alert("Usuário não autenticado!");
+            return;
+        }
 
+        console.log('Enviando mensagem:', text, 'para usuário:', user.id);
 
-    document.getElementById("text").value = "";
+        const { data, error } = await db
+            .from("messages")
+            .insert({
+                user_id: user.id,
+                content: text
+            })
+            .select()
+            .single();
+
+        if (error) {
+            console.error("Erro ao enviar mensagem:", error);
+            alert("Erro ao enviar mensagem: " + error.message);
+            return;
+        }
+
+        console.log('Mensagem enviada com sucesso:', data);
+
+        // Adiciona o username do usuário atual à mensagem
+        const newMessage = {
+            ...data,
+            username: user.user_metadata?.username || "Você"
+        };
+        
+        renderMessage(newMessage);
+        textInput.value = "";
+        textInput.focus();
+
+    } catch (error) {
+        console.error("Erro no envio:", error);
+        alert("Erro inesperado: " + error.message);
+    }
 });
 
 /* ---------------------- REALTIME ---------------------- */
-db.channel("chat")
-.on(
-    "postgres_changes",
-    { event: "INSERT", schema: "public", table: "messages" },
-    (payload) => {
-        console.log("Realtime recebido:", payload.new);
-        fetchUsernameAndRender(payload.new);
+function setupRealtime() {
+    try {
+        const channel = db.channel("chat")
+            .on(
+                "postgres_changes",
+                { 
+                    event: "INSERT", 
+                    schema: "public", 
+                    table: "messages" 
+                },
+                (payload) => {
+                    console.log("Nova mensagem em tempo real:", payload);
+                    // Para novas mensagens, busca o username
+                    fetchUsernameAndRender(payload.new);
+                }
+            )
+            .subscribe((status) => {
+                console.log("Status da subscription realtime:", status);
+            });
+
+    } catch (error) {
+        console.error("Erro ao configurar realtime:", error);
     }
-)
-.subscribe();
+}
 
 /* ---------------------- START ---------------------- */
-checkUser();
-loadMessages();
+async function initializeApp() {
+    try {
+        const user = await checkUser();
+        if (user) {
+            console.log('App inicializado para usuário:', user.id);
+            await loadMessages();
+            setupRealtime();
+        }
+    } catch (error) {
+        console.error('Erro na inicialização do app:', error);
+    }
+}
+
+// Inicializa o app quando a página carregar
+document.addEventListener('DOMContentLoaded', initializeApp);
 
 </script>
 
