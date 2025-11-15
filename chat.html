@@ -28,6 +28,18 @@
             flex: 1;
             padding: 10px;
         }
+
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+            background: #f5f5f5;
+        }
+
+        .own-message {
+            background: #e3f2fd;
+            margin-left: 20px;
+        }
     </style>
 </head>
 <body>
@@ -51,6 +63,8 @@ if (typeof db === 'undefined') {
 }
 
 /* ---------------------- USER ---------------------- */
+let currentUser = null;
+
 async function checkUser() {
     try {
         const { data, error } = await db.auth.getUser();
@@ -59,8 +73,9 @@ async function checkUser() {
             window.location.href = "login.html";
             return null;
         }
-        console.log('Usuário autenticado:', data.user);
-        return data.user;
+        currentUser = data.user;
+        console.log('Usuário autenticado:', currentUser.id);
+        return currentUser;
     } catch (error) {
         console.error('Erro ao verificar usuário:', error);
         window.location.href = "login.html";
@@ -72,22 +87,31 @@ async function checkUser() {
 const messagesDiv = document.getElementById("messages");
 
 function renderMessage(msg) {
-    const el = document.createElement("p");
+    const el = document.createElement("div");
+    el.className = "message";
+    
+    // Destaca mensagens do usuário atual
+    if (currentUser && msg.user_id === currentUser.id) {
+        el.classList.add("own-message");
+    }
     
     const username = msg.username || msg.profiles?.username || "(desconhecido)";
     const content = msg.content;
 
-    el.textContent = username + ": " + content;
+    el.innerHTML = `<strong>${username}:</strong> ${content}`;
     el.setAttribute('data-message-id', msg.id);
+    el.setAttribute('data-user-id', msg.user_id);
 
     messagesDiv.appendChild(el);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-/* Busca username de 1 usuário */
+/* Busca username de 1 usuário - VERSÃO CORRIGIDA */
 async function fetchUsernameAndRender(msg) {
     try {
         console.log('Buscando username para user_id:', msg.user_id);
+        
+        // Tenta buscar da tabela profiles
         const { data, error } = await db
             .from("profiles")
             .select("username")
@@ -96,7 +120,15 @@ async function fetchUsernameAndRender(msg) {
 
         if (error) {
             console.error("Erro ao buscar username:", error);
-            msg.username = "(desconhecido)";
+            
+            // Se não encontrar em profiles, tenta buscar do user_metadata
+            if (currentUser && msg.user_id === currentUser.id) {
+                msg.username = currentUser.user_metadata?.username || "Você";
+            } else {
+                // Para outros usuários, tenta uma abordagem alternativa
+                await tryAlternativeUsernameFetch(msg);
+                return;
+            }
         } else {
             console.log('Username encontrado:', data.username);
             msg.username = data.username;
@@ -110,64 +142,80 @@ async function fetchUsernameAndRender(msg) {
     }
 }
 
+/* Tentativa alternativa de buscar username */
+async function tryAlternativeUsernameFetch(msg) {
+    try {
+        // Tenta buscar através da tabela auth.users (se as permissões permitirem)
+        const { data, error } = await db
+            .from("auth.users")
+            .select("raw_user_meta_data")
+            .eq("id", msg.user_id)
+            .single();
+
+        if (!error && data && data.raw_user_meta_data) {
+            msg.username = data.raw_user_meta_data.username || data.raw_user_meta_data.full_name || "(usuário)";
+        } else {
+            msg.username = `Usuário ${msg.user_id.substring(0, 8)}`;
+        }
+    } catch (err) {
+        msg.username = `Usuário ${msg.user_id.substring(0, 8)}`;
+    }
+    
+    renderMessage(msg);
+}
+
 /* ---------------------- LOAD MESSAGES ---------------------- */
 async function loadMessages() {
     try {
         console.log('Carregando mensagens...');
         
-        // Tenta carregar com join primeiro
+        // LIMPA as mensagens antes de carregar
+        messagesDiv.innerHTML = '<div>Carregando mensagens...</div>';
+        
+        // Busca mensagens com ordenação EXPLÍCITA por data de criação
         const { data, error } = await db
             .from("messages")
             .select(`
                 id, 
                 content, 
                 user_id,
+                created_at,
                 profiles (username)
             `)
-            .order("created_at", { ascending: true });
+            .order("created_at", { ascending: true }); // ASCENDENTE para ordem correta
 
         if (error) {
-            console.error("Erro ao carregar mensagens com join:", error);
-            // Fallback: carrega sem join
-            await loadMessagesWithoutJoin();
+            console.error("Erro ao carregar mensagens:", error);
+            messagesDiv.innerHTML = '<div>Erro ao carregar mensagens</div>';
             return;
         }
 
-        console.log('Mensagens carregadas:', data);
+        console.log(`Carregadas ${data.length} mensagens em ordem:`, data.map(m => ({id: m.id, created_at: m.created_at})));
 
-        // Processa cada mensagem
-        data.forEach(msg => {
+        // LIMPA novamente antes de renderizar
+        messagesDiv.innerHTML = '';
+
+        if (data.length === 0) {
+            messagesDiv.innerHTML = '<div>Nenhuma mensagem ainda. Seja o primeiro a enviar!</div>';
+            return;
+        }
+
+        // Processa cada mensagem garantindo ordem correta
+        for (const msg of data) {
             if (msg.profiles && msg.profiles.username) {
                 // Se o join trouxe o username, renderiza diretamente
                 renderMessage(msg);
             } else {
                 // Se não trouxe, busca individualmente
-                fetchUsernameAndRender(msg);
+                await fetchUsernameAndRender(msg);
             }
-        });
+        }
+
+        console.log('Todas as mensagens foram renderizadas');
 
     } catch (err) {
         console.error("Erro geral ao carregar mensagens:", err);
-    }
-}
-
-/* Fallback para quando o join não funciona */
-async function loadMessagesWithoutJoin() {
-    try {
-        const { data, error } = await db
-            .from("messages")
-            .select("id, content, user_id, created_at")
-            .order("created_at", { ascending: true });
-
-        if (error) {
-            console.error("Erro ao carregar mensagens sem join:", error);
-            return;
-        }
-
-        console.log('Mensagens carregadas sem join:', data);
-        data.forEach(fetchUsernameAndRender);
-    } catch (err) {
-        console.error("Erro no fallback:", err);
+        messagesDiv.innerHTML = '<div>Erro ao carregar mensagens</div>';
     }
 }
 
@@ -184,18 +232,21 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
     }
 
     try {
-        const user = await checkUser();
-        if (!user) {
+        if (!currentUser) {
+            await checkUser();
+        }
+
+        if (!currentUser) {
             alert("Usuário não autenticado!");
             return;
         }
 
-        console.log('Enviando mensagem:', text, 'para usuário:', user.id);
+        console.log('Enviando mensagem:', text);
 
         const { data, error } = await db
             .from("messages")
             .insert({
-                user_id: user.id,
+                user_id: currentUser.id,
                 content: text
             })
             .select()
@@ -209,10 +260,10 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
 
         console.log('Mensagem enviada com sucesso:', data);
 
-        // Adiciona o username do usuário atual à mensagem
+        // Adiciona o username à mensagem
         const newMessage = {
             ...data,
-            username: user.user_metadata?.username || "Você"
+            username: currentUser.user_metadata?.username || currentUser.email || "Você"
         };
         
         renderMessage(newMessage);
@@ -228,7 +279,7 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
 /* ---------------------- REALTIME ---------------------- */
 function setupRealtime() {
     try {
-        const channel = db.channel("chat")
+        const channel = db.channel("public:messages")
             .on(
                 "postgres_changes",
                 { 
@@ -236,15 +287,21 @@ function setupRealtime() {
                     schema: "public", 
                     table: "messages" 
                 },
-                (payload) => {
+                async (payload) => {
                     console.log("Nova mensagem em tempo real:", payload);
-                    // Para novas mensagens, busca o username
-                    fetchUsernameAndRender(payload.new);
+                    
+                    // Verifica se a mensagem já não foi renderizada (evita duplicatas)
+                    const existingMessage = document.querySelector(`[data-message-id="${payload.new.id}"]`);
+                    if (!existingMessage) {
+                        await fetchUsernameAndRender(payload.new);
+                    }
                 }
             )
             .subscribe((status) => {
                 console.log("Status da subscription realtime:", status);
             });
+
+        return channel;
 
     } catch (error) {
         console.error("Erro ao configurar realtime:", error);
@@ -267,6 +324,15 @@ async function initializeApp() {
 
 // Inicializa o app quando a página carregar
 document.addEventListener('DOMContentLoaded', initializeApp);
+
+// Também recarrega as mensagens quando a página ganha foco (útil para testar ordenação)
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+        console.log('Página visível - verificando mensagens...');
+        // Pode recarregar mensagens se necessário
+        // loadMessages();
+    }
+});
 
 </script>
 
