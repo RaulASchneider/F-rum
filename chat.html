@@ -4,179 +4,143 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chat</title>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
     <style>
         body {
             font-family: Arial, sans-serif;
-            background: green;
-            color: white;
-            margin: 0;
-            padding: 0;
-        }
-
-        #chat {
-            height: 80vh;
-            overflow-y: auto;
             padding: 20px;
         }
 
-        .msg {
-            margin-bottom: 12px;
-        }
-
-        #sendBox {
-            display: flex;
+        #messages {
+            border: 1px solid #000;
+            height: 300px;
+            overflow-y: auto;
             padding: 10px;
-            background: #222;
+            margin-bottom: 20px;
         }
 
-        #msgInput {
+        form {
+            display: flex;
+            gap: 10px;
+        }
+
+        input {
             flex: 1;
             padding: 10px;
-            border: none;
-            border-radius: 5px;
-        }
-
-        #sendBtn {
-            padding: 10px 20px;
-            margin-left: 10px;
-            background: #4CAF50;
-            border: none;
-            border-radius: 5px;
-            color: white;
-            cursor: pointer;
         }
     </style>
 </head>
 <body>
 
-    <h2 style="text-align:center;">Chat</h2>
+<h2>Chat</h2>
 
-    <div id="chat"></div>
+<div id="messages"></div>
 
-    <div id="sendBox">
-        <input type="text" id="msgInput" placeholder="Digite sua mensagem...">
-        <button id="sendBtn">Enviar</button>
-    </div>
+<form id="sendForm">
+    <input id="text" placeholder="Digite..." required>
+    <button type="submit">Enviar</button>
+</form>
 
-    <script>
-        const supabase = supabase.createClient(
-            "https://jfrjhbnlnmyfqaumgezp.supabase.co",
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpmcmpoYm5sbm15ZnFhdW1nZXpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwNjI2OTYsImV4cCI6MjA3ODYzODY5Nn0.jHSHEzEEPd-jP7v6OFQw-Nz0D3Y8O7gXvTvqL6QeaDA"
-        );
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase.js"></script>
 
-        let currentUser = null;
+<script>
+/* ---------------------- USER ---------------------- */
+async function checkUser() {
+    const { data } = await db.auth.getUser();
+    if (!data.user) {
+        window.location.href = "login.html";
+        return;
+    }
+    return data.user;
+}
 
-        // 🔹 1. PEGAR USUÁRIO LOGADO
-        async function getUser() {
-            const { data, error } = await supabase.auth.getUser();
+/* ---------------------- RENDER ---------------------- */
+const messagesDiv = document.getElementById("messages");
 
-            if (error || !data.user) {
-                alert("Você precisa estar logado.");
-                window.location.href = "login.html";
-                return;
-            }
+function renderMessage(msg) {
+    const el = document.createElement("p");
 
-            currentUser = data.user;
-        }
+    const username = msg.profiles?.username ?? "(desconhecido)";
+    const content = msg.content;
 
-        // 🔹 2. BUSCA O USERNAME NA TABELA profiles
-        async function getUsername(userId) {
-            const { data, error } = await supabase
-                .from("profiles")
-                .select("username")
-                .eq("id", userId)
-                .single();
+    el.textContent = username + ": " + content;
 
-            if (error || !data) return "Desconhecido";
-            return data.username;
-        }
+    messagesDiv.appendChild(el);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
 
-        // 🔹 3. CARREGAR MENSAGENS
-        async function loadMessages() {
-            const { data: messages, error } = await supabase
-                .from("messages")
-                .select("*")
-                .order("id", { ascending: true });
+/* Busca username de 1 usuário */
+async function fetchUsernameAndRender(msg) {
+    const { data } = await db
+        .from("profiles")
+        .select("username")
+        .eq("id", msg.user_id)
+        .single();
 
-            if (error) {
-                console.log("Erro ao carregar mensagens:", error);
-                return;
-            }
+    msg.profiles = { username: data.username };
+    renderMessage(msg);
+}
 
-            const chat = document.getElementById("chat");
-            chat.innerHTML = "";
+/* ---------------------- LOAD MESSAGES ---------------------- */
+async function loadMessages() {
+    const { data, error } = await db
+        .from("messages")
+        .select("id, content, user_id, profiles(username)")
+        .order("created_at");
 
-            for (const msg of messages) {
-                const username = await getUsername(msg.user_id);
+    if (error) {
+        console.error(error);
+        return;
+    }
 
-                const div = document.createElement("div");
-                div.classList.add("msg");
-                div.innerHTML = `<strong>${username}:</strong> ${msg.content}`;
+    data.forEach(renderMessage);
+}
 
-                chat.appendChild(div);
-            }
+/* ---------------------- SEND ---------------------- */
+document.getElementById("sendForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
 
-            chat.scrollTop = chat.scrollHeight;
-        }
+    const text = document.getElementById("text").value;
+    const user = await checkUser();
 
-        // 🔹 4. ENVIAR MENSAGEM
-        async function sendMessage() {
-            const input = document.getElementById("msgInput");
-            const text = input.value.trim();
+    const { data, error } = await db
+        .from("messages")
+        .insert({
+            user_id: user.id,
+            content: text
+        })
+        .select();
 
-            if (text === "") return;
+    if (error) {
+        console.error("Erro:", error);
+        alert(error.message);
+        return;
+    }
 
-            const { error } = await supabase
-                .from("messages")
-                .insert({
-                    user_id: currentUser.id,
-                    content: text
-                });
+    // Quando o user envia, já podemos puxar username direto
+    fetchUsernameAndRender(data[0]);
 
-            if (error) {
-                console.log("Erro ao enviar:", error);
-                return;
-            }
+    document.getElementById("text").value = "";
+});
 
-            input.value = "";
-        }
+/* ---------------------- REALTIME ---------------------- */
+db.channel("chat")
+.on(
+    "postgres_changes",
+    { event: "INSERT", schema: "public", table: "messages" },
+    (payload) => {
+        console.log("Realtime recebido:", payload.new);
+        fetchUsernameAndRender(payload.new);
+    }
+)
+.subscribe();
 
-        document.getElementById("sendBtn").onclick = sendMessage;
+/* ---------------------- START ---------------------- */
+checkUser();
+loadMessages();
 
-        document.getElementById("msgInput").addEventListener("keypress", e => {
-            if (e.key === "Enter") sendMessage();
-        });
-
-        // 🔹 5. REALTIME — SEM DUPLICAR
-        supabase
-            .channel("chat-room")
-            .on(
-                "postgres_changes",
-                { event: "INSERT", schema: "public", table: "messages" },
-                async payload => {
-                    const msg = payload.new;
-                    const username = await getUsername(msg.user_id);
-
-                    const chat = document.getElementById("chat");
-
-                    const div = document.createElement("div");
-                    div.classList.add("msg");
-                    div.innerHTML = `<strong>${username}:</strong> ${msg.content}`;
-
-                    chat.appendChild(div);
-                    chat.scrollTop = chat.scrollHeight;
-                }
-            )
-            .subscribe();
-
-        // Inicializar
-        (async () => {
-            await getUser();
-            await loadMessages();
-        })();
-    </script>
+</script>
 
 </body>
 </html>
