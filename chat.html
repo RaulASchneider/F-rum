@@ -3,32 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat</title>
+    <title>Chat em Tempo Real</title>
     <style>
         body { font-family: Arial, sans-serif; padding: 20px; }
-        #messages { border: 1px solid #000; height: 300px; overflow-y: auto; padding: 10px; margin-bottom: 20px; }
+        #messages { border: 1px solid #000; height: 400px; overflow-y: auto; padding: 10px; margin-bottom: 20px; background: #f9f9f9; }
         form { display: flex; gap: 10px; }
         input { flex: 1; padding: 10px; }
-        .message { margin: 5px 0; padding: 8px; border-radius: 5px; background: #f5f5f5; }
-        .own-message { background: #e3f2fd; margin-left: 20px; }
-        .error { color: red; }
-        .success { color: green; }
-        .verified-badge {
-            color: #1DA1F2;
-            margin-left: 4px;
-            font-weight: bold;
-        }
+        .message { margin: 8px 0; padding: 10px; border-radius: 8px; background: white; border-left: 4px solid #007bff; }
+        .own-message { background: #e3f2fd; border-left-color: #28a745; }
+        .status { padding: 5px; margin: 5px 0; border-radius: 4px; }
+        .online { background: #d4edda; color: #155724; }
+        .offline { background: #f8d7da; color: #721c24; }
+        .verified-badge { color: #1DA1F2; margin-left: 4px; font-weight: bold; }
+        .message-time { font-size: 0.8em; color: #666; margin-left: 10px; }
     </style>
 </head>
 <body>
 
-<h2>Chat</h2>
+<h2>💬 Chat em Tempo Real</h2>
 
-<div id="status"></div>
+<div id="connectionStatus" class="status"></div>
 <div id="messages"></div>
 
 <form id="sendForm">
-    <input id="text" placeholder="Digite..." required>
+    <input id="text" placeholder="Digite sua mensagem..." required>
     <button type="submit">Enviar</button>
 </form>
 
@@ -40,11 +38,11 @@ let currentUser = null;
 let currentUsername = null;
 let currentUserVerified = false;
 const messagesDiv = document.getElementById("messages");
-const statusDiv = document.getElementById("status");
+const statusDiv = document.getElementById("connectionStatus");
 
-function showStatus(message, type = 'info') {
-    statusDiv.innerHTML = `<div class="${type}">${message}</div>`;
-    console.log(message);
+function showStatus(message, type = 'online') {
+    statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+    console.log(`📢 ${message}`);
 }
 
 /* ---------------------- USER ---------------------- */
@@ -52,117 +50,60 @@ async function checkUser() {
     try {
         const { data, error } = await db.auth.getUser();
         if (error || !data.user) {
-            showStatus('Usuário não autenticado. Redirecionando...', 'error');
+            showStatus('🔒 Usuário não autenticado. Redirecionando...', 'offline');
             setTimeout(() => window.location.href = "login.html", 2000);
             return null;
         }
         currentUser = data.user;
         
-        // Busca ou cria o perfil do usuário
-        const profileResult = await getOrCreateUserProfile(currentUser);
+        const { data: profile } = await db
+            .from('profiles')
+            .select('username, verified')
+            .eq('id', currentUser.id)
+            .single();
+            
+        currentUsername = profile?.username || currentUser.email;
+        currentUserVerified = profile?.verified || false;
         
-        if (profileResult.error) {
-            showStatus('Erro ao carregar perfil', 'error');
-            return null;
-        }
-        
-        currentUsername = profileResult.username;
-        currentUserVerified = profileResult.verified;
-        
-        showStatus(`Usuário: ${currentUsername} ${currentUserVerified ? '✓' : ''}`, 'success');
-        return { 
-            user: currentUser, 
-            username: currentUsername, 
-            verified: currentUserVerified 
-        };
+        showStatus(`🟢 Conectado como: ${currentUsername} ${currentUserVerified ? '✓' : ''}`, 'online');
+        return { user: currentUser, username: currentUsername, verified: currentUserVerified };
         
     } catch (error) {
-        showStatus('Erro ao verificar usuário', 'error');
-        console.error(error);
+        showStatus('🔴 Erro ao verificar usuário', 'offline');
         return null;
     }
 }
 
-/* ---------------------- GET OR CREATE PROFILE ---------------------- */
-async function getOrCreateUserProfile(user) {
-    try {
-        // Tenta buscar o perfil existente
-        const { data: existingProfile, error: fetchError } = await db
-            .from('profiles')
-            .select('username, verified')
-            .eq('id', user.id)
-            .single();
-
-        // Se encontrou, retorna
-        if (existingProfile && !fetchError) {
-            return {
-                username: existingProfile.username,
-                verified: existingProfile.verified || false
-            };
-        }
-
-        // Se não encontrou, cria um novo perfil
-        console.log('Perfil não encontrado, criando novo...');
-        const username = user.user_metadata?.username || 
-                        user.user_metadata?.full_name || 
-                        user.email?.split('@')[0] || 
-                        'Usuario';
-        
-        const { data: newProfile, error: createError } = await db
-            .from('profiles')
-            .insert({
-                id: user.id,
-                username: username,
-                verified: false
-            })
-            .select('username, verified')
-            .single();
-
-        if (createError) {
-            console.error('Erro ao criar perfil:', createError);
-            // Fallback: usa dados básicos
-            return {
-                username: username,
-                verified: false,
-                error: createError
-            };
-        }
-
-        return {
-            username: newProfile.username,
-            verified: newProfile.verified || false
-        };
-
-    } catch (error) {
-        console.error('Erro em getOrCreateUserProfile:', error);
-        return {
-            username: user.email?.split('@')[0] || 'Usuario',
-            verified: false,
-            error: error
-        };
-    }
-}
-
-/* ---------------------- RENDER ---------------------- */
+/* ---------------------- RENDER MESSAGE ---------------------- */
 function renderMessage(msg) {
     const el = document.createElement("div");
     el.className = "message";
     
     const isOwnMessage = currentUser && msg.user_id === currentUser.id;
-    
     if (isOwnMessage) {
         el.classList.add("own-message");
     }
     
-    const username = msg.username || msg.user_id || "(desconhecido)";
+    const username = msg.username || "(desconhecido)";
     const verified = msg.verified || false;
     const content = msg.content;
+    
+    // Formata a data
+    const messageDate = new Date(msg.created_at);
+    const timeString = messageDate.toLocaleTimeString('pt-BR', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+    });
 
     const verifiedBadge = verified ? '<span class="verified-badge">✓</span>' : '';
+    const youBadge = isOwnMessage ? ' <small>(você)</small>' : '';
 
-    el.innerHTML = `<strong>${username}${verifiedBadge}:</strong> ${content}`;
+    el.innerHTML = `
+        <strong>${username}${verifiedBadge}${youBadge}</strong>
+        <span class="message-time">${timeString}</span>
+        <div>${content}</div>
+    `;
     el.setAttribute('data-message-id', msg.id);
-    el.setAttribute('data-user-id', msg.user_id);
 
     messagesDiv.appendChild(el);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -171,7 +112,7 @@ function renderMessage(msg) {
 /* ---------------------- LOAD MESSAGES ---------------------- */
 async function loadMessages() {
     try {
-        showStatus('Carregando mensagens...');
+        showStatus('📥 Carregando mensagens...');
         
         const { data, error } = await db
             .from("messages")
@@ -185,93 +126,30 @@ async function loadMessages() {
             .order("created_at", { ascending: true });
 
         if (error) {
-            console.log("Erro com join:", error);
-            await loadMessagesWithoutJoin();
+            console.error("Erro ao carregar mensagens:", error);
+            showStatus('❌ Erro ao carregar mensagens', 'offline');
             return;
         }
 
         messagesDiv.innerHTML = '';
         
         if (data.length === 0) {
-            messagesDiv.innerHTML = '<div>Nenhuma mensagem ainda. Seja o primeiro a enviar!</div>';
-            showStatus('Nenhuma mensagem encontrada', 'info');
-            return;
-        }
-
-        showStatus(`Carregadas ${data.length} mensagens`, 'success');
-
-        data.forEach(msg => {
-            const messageWithData = {
-                ...msg,
-                username: msg.profiles?.username || msg.user_id,
-                verified: msg.profiles?.verified || false
-            };
-            renderMessage(messageWithData);
-        });
-
-    } catch (err) {
-        showStatus('Erro ao carregar mensagens', 'error');
-        console.error(err);
-    }
-}
-
-/* ---------------------- LOAD MESSAGES WITHOUT JOIN ---------------------- */
-async function loadMessagesWithoutJoin() {
-    try {
-        const { data, error } = await db
-            .from("messages")
-            .select(`
-                id, 
-                content, 
-                user_id,
-                created_at
-            `)
-            .order("created_at", { ascending: true });
-
-        if (error) {
-            showStatus(`Erro ao carregar mensagens: ${error.message}`, 'error');
-            return;
-        }
-
-        messagesDiv.innerHTML = '';
-        
-        if (data.length === 0) {
-            messagesDiv.innerHTML = '<div>Nenhuma mensagem ainda. Seja o primeiro a enviar!</div>';
-            return;
-        }
-
-        for (const msg of data) {
-            await fetchUserProfileAndRender(msg);
-        }
-    } catch (err) {
-        console.error('Erro no load sem join:', err);
-    }
-}
-
-/* ---------------------- FETCH USER PROFILE FOR MESSAGE ---------------------- */
-async function fetchUserProfileAndRender(msg) {
-    try {
-        const { data, error } = await db
-            .from("profiles")
-            .select("username, verified")
-            .eq("id", msg.user_id)
-            .single();
-
-        if (error) {
-            console.error("Erro ao buscar perfil:", error);
-            msg.username = `Usuario_${msg.user_id.substring(0, 8)}`;
-            msg.verified = false;
+            messagesDiv.innerHTML = '<div class="message">💬 Nenhuma mensagem ainda. Seja o primeiro a enviar!</div>';
         } else {
-            msg.username = data.username;
-            msg.verified = data.verified || false;
+            data.forEach(msg => {
+                const messageWithData = {
+                    ...msg,
+                    username: msg.profiles?.username,
+                    verified: msg.profiles?.verified
+                };
+                renderMessage(messageWithData);
+            });
+            showStatus(`✅ ${data.length} mensagens carregadas`, 'online');
         }
-        
-        renderMessage(msg);
+
     } catch (err) {
-        console.error("Erro na busca de perfil:", err);
-        msg.username = "(desconhecido)";
-        msg.verified = false;
-        renderMessage(msg);
+        console.error("Erro ao carregar mensagens:", err);
+        showStatus('❌ Erro ao carregar mensagens', 'offline');
     }
 }
 
@@ -283,7 +161,7 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
     const text = textInput.value.trim();
 
     if (!text) {
-        showStatus('Digite uma mensagem!', 'error');
+        alert("Digite uma mensagem!");
         return;
     }
 
@@ -293,7 +171,7 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
             if (!currentUser) return;
         }
 
-        showStatus('Enviando mensagem...');
+        showStatus('📤 Enviando mensagem...');
 
         const { data, error } = await db
             .from("messages")
@@ -305,47 +183,96 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
             .single();
 
         if (error) {
-            showStatus(`Erro ao enviar: ${error.message}`, 'error');
-            console.error('Detalhes do erro:', error);
+            console.error("Erro ao enviar:", error);
+            showStatus('❌ Erro ao enviar mensagem', 'offline');
             return;
         }
 
-        // Adiciona dados do usuário antes de renderizar
-        data.username = currentUsername;
-        data.verified = currentUserVerified;
-        renderMessage(data);
-        
+        // Limpa o input mas NÃO renderiza a mensagem aqui
+        // Deixa o real-time cuidar disso para todos os usuários
         textInput.value = "";
-        showStatus('Mensagem enviada com sucesso!', 'success');
+        showStatus('🟢 Conectado - Mensagem enviada!', 'online');
 
     } catch (error) {
-        showStatus('Erro inesperado', 'error');
-        console.error(error);
+        console.error("Erro no envio:", error);
+        showStatus('❌ Erro inesperado', 'offline');
     }
 });
 
-/* ---------------------- REALTIME ---------------------- */
+/* ---------------------- REAL-TIME CONNECTION ---------------------- */
 function setupRealtime() {
     try {
-        db.channel("public:messages")
+        showStatus('🔗 Conectando ao real-time...');
+        
+        const channel = db.channel('public:messages')
             .on(
-                "postgres_changes",
-                { 
-                    event: "INSERT", 
-                    schema: "public", 
-                    table: "messages" 
+                'postgres_changes',
+                {
+                    event: 'INSERT',
+                    schema: 'public',
+                    table: 'messages'
                 },
                 async (payload) => {
-                    console.log("Nova mensagem em tempo real:", payload);
-                    await fetchUserProfileAndRender(payload.new);
+                    console.log('🆕 NOVA MENSAGEM EM TEMPO REAL:', payload);
+                    
+                    // Verifica se não é a própria mensagem (evita duplicata)
+                    if (currentUser && payload.new.user_id === currentUser.id) {
+                        console.log('📝 Mensagem própria, ignorando duplicata...');
+                        return;
+                    }
+                    
+                    showStatus('🆕 Nova mensagem recebida!', 'online');
+                    
+                    // Busca o username do autor da mensagem
+                    const { data: profile } = await db
+                        .from('profiles')
+                        .select('username, verified')
+                        .eq('id', payload.new.user_id)
+                        .single();
+                    
+                    const messageWithUser = {
+                        ...payload.new,
+                        username: profile?.username || '(desconhecido)',
+                        verified: profile?.verified || false
+                    };
+                    
+                    renderMessage(messageWithUser);
                 }
             )
-            .subscribe();
-            
-        showStatus('Conexão realtime ativa', 'success');
+            .on('system', { event: 'connected' }, () => {
+                console.log('✅ CONECTADO AO REAL-TIME');
+                showStatus('🟢 Conectado em tempo real!', 'online');
+            })
+            .on('system', { event: 'disconnected' }, () => {
+                console.log('❌ DESCONECTADO DO REAL-TIME');
+                showStatus('🔴 Desconectado do real-time', 'offline');
+            })
+            .subscribe((status) => {
+                console.log('📡 Status da subscription:', status);
+                
+                if (status === 'SUBSCRIBED') {
+                    showStatus('🟢 Conectado em tempo real!', 'online');
+                } else if (status === 'CHANNEL_ERROR') {
+                    showStatus('❌ Erro na conexão real-time', 'offline');
+                } else if (status === 'TIMED_OUT') {
+                    showStatus('⏰ Timeout na conexão', 'offline');
+                }
+            });
+
+        // Reconectar automaticamente se desconectar
+        setInterval(() => {
+            if (channel.state !== 'joined') {
+                console.log('🔄 Tentando reconectar...');
+                showStatus('🔄 Reconectando...', 'offline');
+                channel.subscribe();
+            }
+        }, 5000);
+
+        return channel;
+
     } catch (error) {
-        showStatus('Erro no realtime', 'error');
-        console.error(error);
+        console.error('❌ Erro ao configurar real-time:', error);
+        showStatus('❌ Erro na conexão real-time', 'offline');
     }
 }
 
@@ -358,12 +285,24 @@ async function initializeApp() {
             setupRealtime();
         }
     } catch (error) {
-        console.error('Erro na inicialização:', error);
+        console.error('❌ Erro na inicialização:', error);
+        showStatus('❌ Erro ao inicializar chat', 'offline');
     }
 }
 
-// Inicializa o app
+// Inicializa quando a página carrega
 document.addEventListener('DOMContentLoaded', initializeApp);
+
+// Recarregar mensagens quando a página ganha foco
+document.addEventListener('visibilitychange', function() {
+    if (!document.hidden) {
+        console.log('🔄 Página visível - verificando conexão...');
+        // Recarrega mensagens se estiver desconectado
+        if (statusDiv.textContent.includes('Desconectado')) {
+            loadMessages();
+        }
+    }
+});
 
 </script>
 </body>
