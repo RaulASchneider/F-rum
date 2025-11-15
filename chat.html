@@ -118,6 +118,7 @@
 let currentUser = null;
 let currentUsername = null;
 let currentUserVerified = false;
+let lastMessageId = null; // 🔥 NOVO: Controla a última mensagem enviada
 const messagesDiv = document.getElementById("messages");
 const statusDiv = document.getElementById("connectionStatus");
 
@@ -157,6 +158,13 @@ async function checkUser() {
 
 /* ---------------------- RENDER MESSAGE ---------------------- */
 function renderMessage(msg) {
+    // 🔥 NOVO: Verifica se a mensagem já foi renderizada
+    const existingMessage = document.querySelector(`[data-message-id="${msg.id}"]`);
+    if (existingMessage) {
+        console.log('⏩ Mensagem já existe, ignorando...');
+        return;
+    }
+    
     const el = document.createElement("div");
     el.className = "message";
     
@@ -190,6 +198,9 @@ function renderMessage(msg) {
 
     messagesDiv.appendChild(el);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    
+    // 🔥 NOVO: Atualiza o ID da última mensagem
+    lastMessageId = msg.id;
 }
 
 /* ---------------------- LOAD MESSAGES ---------------------- */
@@ -303,6 +314,12 @@ function setupRealtime() {
                 },
                 async (payload) => {
                     console.log('🆕 NOVA MENSAGEM EM TEMPO REAL:', payload);
+                    
+                    // 🔥 CORREÇÃO: Ignora a própria mensagem no real-time
+                    if (payload.new.id === lastMessageId) {
+                        console.log('⏩ Mensagem própria do real-time, ignorando...');
+                        return;
+                    }
                     
                     showStatus('🆕 Nova mensagem recebida!', 'online');
                     
