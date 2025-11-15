@@ -35,24 +35,24 @@ const password = document.getElementById("password").value;
 
 msg.textContent = "Criando conta...";
 
-// 1. Primeiro cria o usuário no Auth
-const { data, error } = await db.auth.signUp({ 
-    email, 
-    password,
-    options: {
-        data: {
-            username: username  // Isso vai para user_metadata
-        }
-    }
-});
-
-if (error) {
-    msg.textContent = "Erro: " + error.message;
-    return;
-}
-
-// 2. AGORA CORRETO: Insere apenas as colunas que existem
 try {
+    // 1. Cria usuário no Auth
+    const { data, error } = await db.auth.signUp({ 
+        email, 
+        password,
+        options: {
+            data: { username: username }
+        }
+    });
+
+    if (error) {
+        msg.textContent = "Erro: " + error.message;
+        return;
+    }
+
+    console.log('✅ Usuário criado no Auth:', data.user);
+
+    // 2. Tenta criar o perfil (AGORA DEVE FUNCIONAR)
     const { error: profileError } = await db
         .from("profiles")
         .insert({
@@ -62,16 +62,16 @@ try {
         });
 
     if (profileError) {
-        console.error("Erro ao criar perfil:", profileError);
-        msg.textContent = "Conta criada, mas erro no perfil. Faça login manualmente.";
+        console.error('❌ Erro ao criar perfil:', profileError);
+        msg.textContent = "Conta criada no sistema, mas erro no perfil. Faça login manualmente.";
     } else {
-        msg.textContent = "Conta criada com sucesso! Verifique seu email.";
+        msg.textContent = "✅ Conta criada com sucesso! Verifique seu email e faça login.";
     }
-} catch (err) {
-    console.error("Erro:", err);
-    msg.textContent = "Conta criada! Pode fazer login.";
-}
 
+} catch (err) {
+    console.error('💥 Erro geral:', err);
+    msg.textContent = "Erro inesperado: " + err.message;
+}
 });
 </script>
 </body>
