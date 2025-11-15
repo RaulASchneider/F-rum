@@ -13,6 +13,11 @@
         .own-message { background: #e3f2fd; margin-left: 20px; }
         .error { color: red; }
         .success { color: green; }
+        .verified-badge {
+            color: #1DA1F2;
+            margin-left: 4px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
@@ -32,6 +37,8 @@
 
 <script>
 let currentUser = null;
+let currentUsername = null;
+let currentUserVerified = false;
 const messagesDiv = document.getElementById("messages");
 const statusDiv = document.getElementById("status");
 
@@ -51,16 +58,28 @@ async function checkUser() {
         }
         currentUser = data.user;
         
-        // Agora precisamos buscar o username do perfil
-        const { data: profile } = await db
+        // Busca o username e verified do perfil do usuário atual
+        const { data: profile, error: profileError } = await db
             .from('profiles')
-            .select('username')
+            .select('username, verified')
             .eq('id', currentUser.id)
             .single();
             
-        currentUser.username = profile?.username || currentUser.email;
-        showStatus(`Usuário autenticado: ${currentUser.username}`, 'success');
-        return currentUser;
+        if (profileError) {
+            console.error('Erro ao buscar perfil:', profileError);
+            currentUsername = currentUser.email || 'Usuário';
+            currentUserVerified = false;
+        } else {
+            currentUsername = profile?.username || currentUser.email || 'Usuário';
+            currentUserVerified = profile?.verified || false;
+        }
+        
+        showStatus(`Usuário autenticado: ${currentUsername} ${currentUserVerified ? '✓' : ''}`, 'success');
+        return { 
+            user: currentUser, 
+            username: currentUsername, 
+            verified: currentUserVerified 
+        };
         
     } catch (error) {
         showStatus('Erro ao verificar usuário', 'error');
@@ -74,20 +93,24 @@ function renderMessage(msg) {
     const el = document.createElement("div");
     el.className = "message";
     
-    // Verifica se é mensagem do usuário atual
-    const isOwnMessage = currentUser && 
-        (msg.user_id === currentUser.id || msg.user_id === currentUser.username);
+    // Verifica se é mensagem do usuário atual comparando user_id
+    const isOwnMessage = currentUser && msg.user_id === currentUser.id;
     
     if (isOwnMessage) {
         el.classList.add("own-message");
     }
     
-    // Agora user_id JÁ É o username
-    const username = msg.user_id || "(desconhecido)";
+    // O username deve vir de um join ou de um campo separado
+    const username = msg.username || msg.user_id || "(desconhecido)";
+    const verified = msg.verified || false;
     const content = msg.content;
 
-    el.innerHTML = `<strong>${username}:</strong> ${content}`;
+    // Adiciona o símbolo de verificado se for true
+    const verifiedBadge = verified ? '<span class="verified-badge">✓</span>' : '';
+
+    el.innerHTML = `<strong>${username}${verifiedBadge}:</strong> ${content}`;
     el.setAttribute('data-message-id', msg.id);
+    el.setAttribute('data-user-id', msg.user_id);
 
     messagesDiv.appendChild(el);
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
@@ -98,20 +121,22 @@ async function loadMessages() {
     try {
         showStatus('Carregando mensagens...');
         
-        // Agora a query é mais simples - user_id já é o username
+        // Carrega mensagens com informações de verificação
         const { data, error } = await db
             .from("messages")
             .select(`
                 id, 
                 content, 
                 user_id,
-                created_at
+                created_at,
+                profiles!inner(username, verified)
             `)
             .order("created_at", { ascending: true });
 
         if (error) {
-            showStatus(`Erro ao carregar mensagens: ${error.message}`, 'error');
-            console.error(error);
+            console.log("Erro com join, tentando sem join:", error);
+            // Fallback: carrega sem join
+            await loadMessagesWithoutJoin();
             return;
         }
 
@@ -125,14 +150,80 @@ async function loadMessages() {
 
         showStatus(`Carregadas ${data.length} mensagens`, 'success');
 
-        // Renderiza todas as mensagens
+        // Processa mensagens com username e verified do join
         data.forEach(msg => {
-            renderMessage(msg);
+            const messageWithData = {
+                ...msg,
+                username: msg.profiles?.username || msg.user_id,
+                verified: msg.profiles?.verified || false
+            };
+            renderMessage(messageWithData);
         });
 
     } catch (err) {
         showStatus('Erro ao carregar mensagens', 'error');
         console.error(err);
+    }
+}
+
+/* ---------------------- LOAD MESSAGES WITHOUT JOIN ---------------------- */
+async function loadMessagesWithoutJoin() {
+    try {
+        const { data, error } = await db
+            .from("messages")
+            .select(`
+                id, 
+                content, 
+                user_id,
+                created_at
+            `)
+            .order("created_at", { ascending: true });
+
+        if (error) {
+            showStatus(`Erro ao carregar mensagens: ${error.message}`, 'error');
+            return;
+        }
+
+        messagesDiv.innerHTML = '';
+        
+        if (data.length === 0) {
+            messagesDiv.innerHTML = '<div>Nenhuma mensagem ainda. Seja o primeiro a enviar!</div>';
+            return;
+        }
+
+        // Busca informações de verified para cada mensagem
+        for (const msg of data) {
+            await fetchUserProfileAndRender(msg);
+        }
+    } catch (err) {
+        console.error('Erro no load sem join:', err);
+    }
+}
+
+/* ---------------------- FETCH USER PROFILE FOR MESSAGE ---------------------- */
+async function fetchUserProfileAndRender(msg) {
+    try {
+        const { data, error } = await db
+            .from("profiles")
+            .select("username, verified")
+            .eq("id", msg.user_id)
+            .single();
+
+        if (error) {
+            console.error("Erro ao buscar perfil:", error);
+            msg.username = `Usuário ${msg.user_id.substring(0, 8)}`;
+            msg.verified = false;
+        } else {
+            msg.username = data.username;
+            msg.verified = data.verified || false;
+        }
+        
+        renderMessage(msg);
+    } catch (err) {
+        console.error("Erro na busca de perfil:", err);
+        msg.username = "(desconhecido)";
+        msg.verified = false;
+        renderMessage(msg);
     }
 }
 
@@ -156,11 +247,11 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
 
         showStatus('Enviando mensagem...');
 
-        // Agora envia o username como user_id
+        // Envia a mensagem
         const { data, error } = await db
             .from("messages")
             .insert({
-                user_id: currentUser.username,  // Envia o username como user_id
+                user_id: currentUser.id,
                 content: text
             })
             .select()
@@ -169,28 +260,14 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
         if (error) {
             showStatus(`Erro ao enviar: ${error.message}`, 'error');
             console.error('Detalhes do erro:', error);
-            
-            if (error.code === '42501') {
-                showStatus('ERRO: Política (Policy) não configurada.', 'error');
-                console.log(`
-                ⚠️ CONFIGURE AS POLICIES NO SUPABASE:
-                
-                SQL para executar no Editor SQL:
-                
-                -- Policy para INSERT
-                CREATE POLICY "Usuários autenticados podem enviar mensagens" 
-                ON messages FOR INSERT TO authenticated WITH CHECK (true);
-                
-                -- Policy para SELECT  
-                CREATE POLICY "Todos podem ver mensagens" 
-                ON messages FOR SELECT TO authenticated USING (true);
-                `);
-            }
             return;
         }
 
-        // Mensagem enviada com sucesso
+        // Adiciona username e verified antes de renderizar
+        data.username = currentUsername;
+        data.verified = currentUserVerified;
         renderMessage(data);
+        
         textInput.value = "";
         showStatus('Mensagem enviada com sucesso!', 'success');
 
@@ -211,10 +288,11 @@ function setupRealtime() {
                     schema: "public", 
                     table: "messages" 
                 },
-                (payload) => {
+                async (payload) => {
                     console.log("Nova mensagem em tempo real:", payload);
-                    // Renderiza diretamente - user_id já é o username
-                    renderMessage(payload.new);
+                    
+                    // Para mensagens em tempo real, busca o perfil completo
+                    await fetchUserProfileAndRender(payload.new);
                 }
             )
             .subscribe();
@@ -229,8 +307,8 @@ function setupRealtime() {
 /* ---------------------- INITIALIZE APP ---------------------- */
 async function initializeApp() {
     try {
-        const user = await checkUser();
-        if (user) {
+        const userInfo = await checkUser();
+        if (userInfo) {
             await loadMessages();
             setupRealtime();
         }
