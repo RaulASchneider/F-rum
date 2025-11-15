@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Perfil</title>
+</head>
+<body>
+<h1>Perfil</h1>
+<a href="chat.html">Voltar</a>
+
+
+<p id="info"></p>
+
+
+<form id="editForm">
+<input id="username" placeholder="Novo username"><br>
+<button>Salvar</button>
+</form>
+
+
+<p id="msg"></p>
+
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase.js"></script>
+
+
+<script>
+async function loadProfile() {
+const { data: u } = await db.auth.getUser();
+if (!u.user) window.location.href = "login.html";
+
+
+const { data } = await db.from("profiles").select("*").eq("id", u.user.id).single();
+
+
+document.getElementById("info").textContent = "Usuário: " + data.username;
+}
+
+
+document.getElementById("editForm").addEventListener("submit", async (e) => {
+e.preventDefault();
+const { data: u } = await db.auth.getUser();
+const newName = document.getElementById("username").value;
+
+
+await db.from("profiles").update({ username: newName }).eq("id", u.user.id);
+document.getElementById("msg").textContent = "Atualizado!";
+loadProfile();
+});
+
+
+loadProfile();
+</script>
+</body>
+</html>

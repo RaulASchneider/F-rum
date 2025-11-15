@@ -1,0 +1,72 @@
+
+<!-- ========================= -->
+<!-- ======== signup.html ======== -->
+<!-- ========================= -->
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Criar Conta</title>
+</head>
+<body>
+<h1>Criar Conta</h1>
+
+
+<form id="form">
+<input id="username" placeholder="Usuário" required minlength="3"><br>
+<input id="email" type="email" placeholder="Email" required><br>
+<input id="password" type="password" placeholder="Senha" required minlength="6"><br>
+<button>Cadastrar</button>
+</form>
+
+
+<p id="msg"></p>
+
+
+<a href="login.html">Já tem conta?</a>
+
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase.js"></script>
+
+
+<script>
+const form = document.getElementById("form");
+const msg = document.getElementById("msg");
+
+
+form.addEventListener("submit", async (e) => {
+e.preventDefault();
+
+
+const username = document.getElementById("username").value.trim();
+const email = document.getElementById("email").value.trim();
+const password = document.getElementById("password").value;
+
+
+msg.textContent = "Criando conta...";
+
+
+const { data, error } = await db.auth.signUp({ email, password });
+
+
+if (error) {
+msg.textContent = "Erro: " + error.message;
+return;
+}
+
+
+await db.from("profiles").insert({
+id: data.user.id,
+username,
+email,
+is_verified: false
+});
+
+
+msg.textContent = "Conta criada! Vá para o login.";
+});
+</script>
+</body>
+</html>
