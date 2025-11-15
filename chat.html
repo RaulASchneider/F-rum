@@ -58,23 +58,18 @@ async function checkUser() {
         }
         currentUser = data.user;
         
-        // Busca o username e verified do perfil do usuário atual
-        const { data: profile, error: profileError } = await db
-            .from('profiles')
-            .select('username, verified')
-            .eq('id', currentUser.id)
-            .single();
-            
-        if (profileError) {
-            console.error('Erro ao buscar perfil:', profileError);
-            currentUsername = currentUser.email || 'Usuário';
-            currentUserVerified = false;
-        } else {
-            currentUsername = profile?.username || currentUser.email || 'Usuário';
-            currentUserVerified = profile?.verified || false;
+        // Busca ou cria o perfil do usuário
+        const profileResult = await getOrCreateUserProfile(currentUser);
+        
+        if (profileResult.error) {
+            showStatus('Erro ao carregar perfil', 'error');
+            return null;
         }
         
-        showStatus(`Usuário autenticado: ${currentUsername} ${currentUserVerified ? '✓' : ''}`, 'success');
+        currentUsername = profileResult.username;
+        currentUserVerified = profileResult.verified;
+        
+        showStatus(`Usuário: ${currentUsername} ${currentUserVerified ? '✓' : ''}`, 'success');
         return { 
             user: currentUser, 
             username: currentUsername, 
@@ -88,24 +83,81 @@ async function checkUser() {
     }
 }
 
+/* ---------------------- GET OR CREATE PROFILE ---------------------- */
+async function getOrCreateUserProfile(user) {
+    try {
+        // Tenta buscar o perfil existente
+        const { data: existingProfile, error: fetchError } = await db
+            .from('profiles')
+            .select('username, verified')
+            .eq('id', user.id)
+            .single();
+
+        // Se encontrou, retorna
+        if (existingProfile && !fetchError) {
+            return {
+                username: existingProfile.username,
+                verified: existingProfile.verified || false
+            };
+        }
+
+        // Se não encontrou, cria um novo perfil
+        console.log('Perfil não encontrado, criando novo...');
+        const username = user.user_metadata?.username || 
+                        user.user_metadata?.full_name || 
+                        user.email?.split('@')[0] || 
+                        'Usuario';
+        
+        const { data: newProfile, error: createError } = await db
+            .from('profiles')
+            .insert({
+                id: user.id,
+                username: username,
+                verified: false
+            })
+            .select('username, verified')
+            .single();
+
+        if (createError) {
+            console.error('Erro ao criar perfil:', createError);
+            // Fallback: usa dados básicos
+            return {
+                username: username,
+                verified: false,
+                error: createError
+            };
+        }
+
+        return {
+            username: newProfile.username,
+            verified: newProfile.verified || false
+        };
+
+    } catch (error) {
+        console.error('Erro em getOrCreateUserProfile:', error);
+        return {
+            username: user.email?.split('@')[0] || 'Usuario',
+            verified: false,
+            error: error
+        };
+    }
+}
+
 /* ---------------------- RENDER ---------------------- */
 function renderMessage(msg) {
     const el = document.createElement("div");
     el.className = "message";
     
-    // Verifica se é mensagem do usuário atual comparando user_id
     const isOwnMessage = currentUser && msg.user_id === currentUser.id;
     
     if (isOwnMessage) {
         el.classList.add("own-message");
     }
     
-    // O username deve vir de um join ou de um campo separado
     const username = msg.username || msg.user_id || "(desconhecido)";
     const verified = msg.verified || false;
     const content = msg.content;
 
-    // Adiciona o símbolo de verificado se for true
     const verifiedBadge = verified ? '<span class="verified-badge">✓</span>' : '';
 
     el.innerHTML = `<strong>${username}${verifiedBadge}:</strong> ${content}`;
@@ -121,7 +173,6 @@ async function loadMessages() {
     try {
         showStatus('Carregando mensagens...');
         
-        // Carrega mensagens com informações de verificação
         const { data, error } = await db
             .from("messages")
             .select(`
@@ -134,8 +185,7 @@ async function loadMessages() {
             .order("created_at", { ascending: true });
 
         if (error) {
-            console.log("Erro com join, tentando sem join:", error);
-            // Fallback: carrega sem join
+            console.log("Erro com join:", error);
             await loadMessagesWithoutJoin();
             return;
         }
@@ -150,7 +200,6 @@ async function loadMessages() {
 
         showStatus(`Carregadas ${data.length} mensagens`, 'success');
 
-        // Processa mensagens com username e verified do join
         data.forEach(msg => {
             const messageWithData = {
                 ...msg,
@@ -191,7 +240,6 @@ async function loadMessagesWithoutJoin() {
             return;
         }
 
-        // Busca informações de verified para cada mensagem
         for (const msg of data) {
             await fetchUserProfileAndRender(msg);
         }
@@ -211,7 +259,7 @@ async function fetchUserProfileAndRender(msg) {
 
         if (error) {
             console.error("Erro ao buscar perfil:", error);
-            msg.username = `Usuário ${msg.user_id.substring(0, 8)}`;
+            msg.username = `Usuario_${msg.user_id.substring(0, 8)}`;
             msg.verified = false;
         } else {
             msg.username = data.username;
@@ -247,7 +295,6 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
 
         showStatus('Enviando mensagem...');
 
-        // Envia a mensagem
         const { data, error } = await db
             .from("messages")
             .insert({
@@ -263,7 +310,7 @@ document.getElementById("sendForm").addEventListener("submit", async (e) => {
             return;
         }
 
-        // Adiciona username e verified antes de renderizar
+        // Adiciona dados do usuário antes de renderizar
         data.username = currentUsername;
         data.verified = currentUserVerified;
         renderMessage(data);
@@ -290,8 +337,6 @@ function setupRealtime() {
                 },
                 async (payload) => {
                     console.log("Nova mensagem em tempo real:", payload);
-                    
-                    // Para mensagens em tempo real, busca o perfil completo
                     await fetchUserProfileAndRender(payload.new);
                 }
             )
